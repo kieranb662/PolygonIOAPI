@@ -1,22 +1,46 @@
+// Swift toolchain version 5.0
+// Running macOS version 11.1
+// Created on 1/19/21.
+//
+// Author: Kieran Brown
+//
+
 import Foundation
-import Combine
 
-public class PolygonIO {
-    private var apiKeyProvider = APIKeyProvider()
-    public let sessionManager: SessionManager
-    public let baseURL: String
-
-    public init(apiKey: String? = nil,
-                baseURL: String = "api.polygon.io",
-                sessionManager: SessionManager = SessionManager()) {
-        self.sessionManager = sessionManager
-        self.baseURL = baseURL
-        self.apiKeyProvider.key = apiKey
-        self.sessionManager.apiKeyProvider = apiKeyProvider
+public struct Endpoint {
+    let path: String
+    let queryItems: [URLQueryItem]
+    public init(path: String, queryItems: [URLQueryItem] = []) {
+        self.path = path
+        self.queryItems = queryItems
     }
 }
 
-public extension PolygonIO {
+public extension Endpoint {
+    static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter
+    }()
+}
+
+extension Endpoint {
+    public func urlRequest(baseUrl: String = "api.polygon.io", keyProvider: APIKeyProvider?) -> URLRequest {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = baseUrl
+        components.path = path
+        var queryItems = self.queryItems
+        if let key = keyProvider?.key {
+            queryItems = queryItems + [URLQueryItem(name: "apiKey", value: key)]
+        }
+        components.queryItems = queryItems
+        return URLRequest(url: components.url ?? .init(fileURLWithPath: ""))
+    }
+}
+
+extension Endpoint {
+    
     /// Query all ticker symbols which are supported by Polygon.io. Returns basic reference data for each matched ticker symbol.
     /// This API includes Crypto, Forex, and Stocks/Equities.
     /// - Parameters:
@@ -24,35 +48,40 @@ public extension PolygonIO {
     ///   - perPage: The maximum number of results to be returned on each page, max 50 and default 50.
     ///   - page: Which page of results to return.
     /// - Returns: `Tickers`
-    func tickers(search: String?, perPage: Int = 50, page: Int = 1) -> AnyPublisher<Tickers, Error> {
-        return sessionManager.execute(.tickers(search: search, perPage: perPage, page: page), baseURL: baseURL)
+    static func tickers(search: String?, perPage: Int = 50, page: Int = 1) -> Endpoint {
+        return Endpoint(
+            path: "/v2/reference/tickers",
+            queryItems: [
+                URLQueryItem(name: "sort", value: "ticker"),
+                URLQueryItem(name: "search", value: search),
+                URLQueryItem(name: "perpage", value: "\(perPage)"),
+                URLQueryItem(name: "page", value: "\(page)")
+            ])
     }
     /// Get a list of historical dividends for a stock, including the relevant dates and the amount of the dividend.
     /// - Parameter symbol: The ticker symbol of the company to search
     /// - returns: `Dividends` object
-    func companyDividends(for symbol: String) -> AnyPublisher<Dividends, Error> {
-        return sessionManager.execute(.companyDividends(for: symbol), baseURL: baseURL)
+    static func companyDividends(for symbol: String) -> Endpoint {
+        return Endpoint(path: "/v2/reference/dividends/\(symbol.preProcess())")
     }
     /// Get details for a ticker symbol's company/entity. This provides a general overview of the entity with information such as name,
     /// sector, exchange, logo and similar companies.
     /// - Parameter symbol: The ticker symbol of the entity to search.
     /// - returns: `TickerDetails` Object
-    func tickerDetails(for symbol: String) -> AnyPublisher<TickerDetails, Error> {
-        return sessionManager.execute(.tickerDetails(for: symbol), baseURL: baseURL)
+    static func tickerDetails(for symbol: String) -> Endpoint {
+        return Endpoint(path: "/v1/meta/symbols/\(symbol.preProcess())/company")
     }
     /// Get a mapping of ticker types to their descriptive names.
     /// - returns: `TickerTypeResults`
-    func tickerTypes() -> AnyPublisher<TickerTypeResults, Error>  {
-        return sessionManager.execute(.tickerTypes, baseURL: baseURL)
-    }
+    static let tickerTypes = Endpoint(path: "/v2/reference/types")
     /// Get the current minute, day, and previous day’s aggregate, as well as the last trade and quote for a single traded stock ticker.
     ///
     /// - parameter symbol: The ticker symbol of the stock/equity.
     /// - Note: Snapshot data is cleared at 12am EST and gets populated as data is received from the exchanges.
     /// This can happen as early as 4am EST.
     /// - returns: `SnapshotData`
-    func realtimeData(for symbol: String) -> AnyPublisher<SnapshotData, Error>  {
-        return sessionManager.execute(.realtimeData(for: symbol), baseURL: baseURL)
+    static func realtimeData(for symbol: String) -> Endpoint {
+        return Endpoint(path: "/v2/snapshot/locale/us/markets/stocks/tickers/\(symbol.preProcess())")
     }
     /// Get NBBO quotes for a given ticker symbol on a specified date.
     /// - Parameters:
@@ -60,9 +89,14 @@ public extension PolygonIO {
     ///   - date: The date/day of the quotes to retrieve in the format YYYY-MM-DD.
     ///   - reverseResults: Reverse the order of the results.  (**default**: true)
     ///   - limit: Limit the size of the response, max 50000 and default 5000.
-    func quotes(
-        for symbol: String, date: Date, reverseResults: Bool = true, limit: Int = 5000) -> AnyPublisher<Data, Error>  {
-        return sessionManager.execute(.quotes(for: symbol, date: date, reverseResults: reverseResults, limit: limit), baseURL: baseURL)
+    static func quotes(
+        for symbol: String, date: Date, reverseResults: Bool = true, limit: Int = 5000) -> Endpoint {
+        return Endpoint(
+            path: "/v2/ticks/stocks/nbbo/\(symbol.preProcess())/\(dateFormatter.string(from: date))",
+            queryItems: [
+                URLQueryItem(name: "reverse", value: String(reverseResults)),
+                URLQueryItem(name: "limit", value: String(limit))
+            ])
     }
     /// Get trades for a given ticker symbol on a specified date.
     /// - Parameters:
@@ -71,29 +105,34 @@ public extension PolygonIO {
     ///   - reverseResults: Reverse the order of the results. (**default**: true)
     ///   - limit: Limit the size of the response, max 50000 and default 5000.
     /// - Returns: `TradeData`
-    func trades(
-        for symbol: String, date: Date, reverseResults: Bool = true, limit: Int = 10) -> AnyPublisher<TradeData, Error> {
-        return sessionManager.execute(.quotes(for: symbol, date: date, reverseResults: reverseResults, limit: limit), baseURL: baseURL)
+    static func trades(
+        for symbol: String, date: Date, reverseResults: Bool = true, limit: Int = 10) -> Endpoint {
+        return Endpoint(
+            path: "/v2/ticks/stocks/trades/\(symbol.preProcess())/\(dateFormatter.string(from: date))",
+            queryItems: [
+                URLQueryItem(name: "reverse", value: String(reverseResults)),
+                URLQueryItem(name: "limit", value: String(limit))
+            ])
     }
     /// Get the open, close and afterhours prices of a stock symbol on a certain date.
     /// - Parameters:
     ///   - symbol: The ticker symbol of the stock/equity.
     ///   - date: The date of the requested open/close in the format YYYY-MM-DD.
     /// - returns: `DailyOpenClose`
-    func dailyOpenAndClose(for symbol: String, date: Date) ->  AnyPublisher<DailyOpenClose, Error> {
-        return sessionManager.execute(.dailyOpenAndClose(for: symbol, date: date), baseURL: baseURL)
+    static func dailyOpenAndClose(for symbol: String, date: Date) -> Endpoint {
+        return Endpoint(path: "/v1/open-close/\(symbol.preProcess())/\(dateFormatter.string(from: date))")
     }
     /// Get the most recent trade for a given stock.
     /// - parameter symbol: The ticker symbol of the stock/equity.
     /// - returns: `LastTrade`
-    func lastTrade(for symbol: String) -> AnyPublisher<LastTrade, Error>  {
-        return sessionManager.execute(.lastTrade(for: symbol), baseURL: baseURL)
+    static func lastTrade(for symbol: String) -> Endpoint {
+        return Endpoint(path: "/v1/last/stocks/\(symbol.preProcess())")
     }
     /// Get the most recent quote tick for a given stock.
     /// - parameter symbol: The ticker symbol of the stock/equity.
     /// - returns: `LastQuote`
-    func lastQuote(for symbol: String) -> AnyPublisher<LastQuote, Error>  {
-        return sessionManager.execute(.lastQuote(for: symbol), baseURL: baseURL)
+    static func lastQuote(for symbol: String) -> Endpoint {
+        return Endpoint(path: "/v1/last_quote/stocks/\(symbol.preProcess())")
     }
     /// Get the daily open, high, low, and close (OHLC) for the entire stocks/equities markets.
     /// - Parameters:
@@ -101,8 +140,10 @@ public extension PolygonIO {
     ///   - unadjusted: Whether or not the results are adjusted for splits. By default, results are adjusted. Set this to true to get
     ///   results that are NOT adjusted for splits.
     /// - returns: `GroupedDailyBars`
-    func groupedDailyBars(on date: Date, unadjusted: Bool) -> AnyPublisher<GroupedDailyBars, Error>  {
-        return sessionManager.execute(.groupedDailyBars(on: date, unadjusted: unadjusted), baseURL: baseURL)
+    static func groupedDailyBars(on date: Date, unadjusted: Bool) -> Endpoint  {
+        return Endpoint(
+            path: "/v2/aggs/grouped/locale/us/market/stocks/\(dateFormatter.string(from: date))",
+            queryItems: [URLQueryItem(name: "unadjusted", value: unadjusted.description)])
     }
     /// Get the previous day's open, high, low, and close (OHLC) for the specified stock ticker.
     /// - Parameters:
@@ -110,8 +151,10 @@ public extension PolygonIO {
     ///   - unadjusted: Whether or not the results are adjusted for splits. By default, results are adjusted. Set this to true to get
     ///   results that are NOT adjusted for splits.
     /// - returns: `PreviousClose`
-    func previousClose(for symbol: String, unadjusted: Bool) -> AnyPublisher<PreviousClose, Error>  {
-        return sessionManager.execute(.previousClose(for: symbol, unadjusted: unadjusted), baseURL: baseURL)
+    static func previousClose(for symbol: String, unadjusted: Bool) -> Endpoint {
+        return Endpoint(
+            path: "/v2/aggs/ticker/\(symbol.preProcess())/prev",
+            queryItems: [URLQueryItem(name: "unadjusted", value: unadjusted.description)])
     }
     /// Get aggregate bars for a stock over a given date range in custom time window sizes.
     /// - Parameters:
@@ -126,9 +169,15 @@ public extension PolygonIO {
     ///   in descending order (newest at the top).
     ///   - limit: Limits the number of base aggregates queried to create the aggregate results. Max 50000 and Default 5000.
     /// - returns: `Aggregates`
-    func aggregates(
-        for symbol: String, multiplier: Int, timespan: Timespan, from: Date, to: Date, unadjusted: Bool, sort: BarSortMethod, limit: Int) -> AnyPublisher<Aggregates, Error>  {
-        return sessionManager.execute(.aggregates(for: symbol, multiplier: multiplier, timespan: timespan, from: from, to: to, unadjusted: unadjusted, sort: sort, limit: limit), baseURL: baseURL)
+    static func aggregates(
+        for symbol: String, multiplier: Int, timespan: Timespan, from: Date, to: Date, unadjusted: Bool, sort: BarSortMethod, limit: Int) -> Endpoint {
+        return Endpoint(
+            path: "/v2/aggs/ticker/\(symbol.preProcess())/range/\(multiplier)/\(timespan.rawValue)/\(dateFormatter.string(from: from))/\(dateFormatter.string(from: to))",
+            queryItems: [
+                URLQueryItem(name: "unadjusted", value: unadjusted.description),
+                URLQueryItem(name: "sort", value: sort.rawValue),
+                URLQueryItem(name: "limit", value: limit.description)
+            ])
     }
     /// Get the current top 20 gainers or losers of the day in stocks/equities markets.
     ///
@@ -136,8 +185,8 @@ public extension PolygonIO {
     /// - Top losers are those tickers whose price has decreased by the highest percentage since the previous day's close.
     /// - Parameter direction: The direction of the snapshot results to return.
     /// - returns: `GainersLosers`
-    func snapshotGainersLosers(direction: Direction) -> AnyPublisher<GainersLosers, Error>  {
-        return sessionManager.execute(.snapshotGainersLosers(direction: direction), baseURL: baseURL)
+    static func snapshotGainersLosers(direction: Direction) -> Endpoint {
+        return Endpoint(path: "/v2/snapshot/locale/us/markets/stocks/\(direction.rawValue)")
     }
     /// Get the most recent news articles relating to a stock ticker symbol, including a summary of the article and a link to the original source.
     /// - Parameters:
@@ -145,9 +194,14 @@ public extension PolygonIO {
     ///   - itemsPerPage: The maximum number of results to be returned on each page, max 50 and default 50.
     ///   - pageNumber: Which page of results to return.
     /// - returns: `TickerNews`
-    func news(
-        for symbol: String = "AAPL", itemsPerPage: Int = 50, pageNumber: Int = 1) -> AnyPublisher<TickerNews, Error>  {
-        return sessionManager.execute(.news(for: symbol, itemsPerPage: itemsPerPage, pageNumber: pageNumber), baseURL: baseURL)
+    static func news(
+        for symbol: String = "AAPL", itemsPerPage: Int = 50, pageNumber: Int = 1) -> Endpoint {
+        return Endpoint(
+            path: "/v1/meta/symbols/\(symbol.preProcess())/news",
+            queryItems: [
+                URLQueryItem(name: "perpage", value: String(itemsPerPage)),
+                URLQueryItem(name: "page", value: String(pageNumber))
+            ])
     }
     /// Get a unified numerical mapping for conditions on trades and quotes.
     ///
@@ -156,24 +210,24 @@ public extension PolygonIO {
     ///  across feeds/exchanges.
     ///  - parameter type: The type of ticks to return mappings for. (trades or quotes)
     /// - returns: `ConditionMappings`
-    func conditionMappings(type: TickType) -> AnyPublisher<ConditionMappings, Error>  {
-        return sessionManager.execute(.conditionMappings(type: type), baseURL: baseURL)
+    static func conditionMappings(type: TickType) -> Endpoint {
+        return Endpoint(path: "/v1/meta/conditions/\(type.rawValue)")
     }
     /// Get a list of stock exchanges which are supported by Polygon.io.
     /// - returns: `ExchangeMappings`
-    var exchanges: AnyPublisher<ExchangeMappings, Error>  {
-        return sessionManager.execute(.exchanges, baseURL: baseURL)
+    static var exchanges: Endpoint {
+        return Endpoint(path: "/v1/meta/exchanges")
     }
     /// Get upcoming market holidays and their open/close times.
     /// - returns: `MarketHolidays`
-    var marketHolidays: AnyPublisher<MarketHoliday, Error>  {
-        return sessionManager.execute(.marketHolidays, baseURL: baseURL)
+    static var marketHolidays: Endpoint {
+        return Endpoint(path: "/v1/marketstatus/upcoming")
     }
     /// Get a list of historical stock splits for a ticker symbol, including the execution and payment dates of the stock split, and the split ratio.
     ///   - parameter symbol: The ticker symbol of the stock/equity.
     /// - returns: `StockSplits`
-    func stockSplitsQuery(_ symbol: String) -> AnyPublisher<StockSplits, Error>  {
-        return sessionManager.execute(.stockSplitsQuery(symbol), baseURL: baseURL)
+    static func stockSplitsQuery(_ symbol: String) -> Endpoint {
+        return Endpoint(path: "/v2/reference/splits/\(symbol.preProcess())")
     }
     /// Get historical financial data for a stock ticker.
     /// - Parameters:
@@ -182,50 +236,14 @@ public extension PolygonIO {
     ///   - reportType: Year, year annualized, quarter, quarter annualized, trailing twelve months, trailing twelve months annualized
     ///   - sortMethod: The direction to sort the returned results.
     /// - returns: `StockTickerFinancials`
-    func stockFinancials(
-        for symbol: String, limit: Int, type: FinancialReportType, method: SortMethod) -> AnyPublisher<StockTickerFinancials, Error>  {
-        return sessionManager.execute(.stockFinancials(for: symbol, limit: limit, type: type, method: method), baseURL: baseURL)
+    static func stockFinancials(
+        for symbol: String, limit: Int, type: FinancialReportType, method: SortMethod) -> Endpoint {
+        return Endpoint(
+            path: "/v2/reference/financials/\(symbol.preProcess())",
+            queryItems: [
+                URLQueryItem(name: "limit", value: String(limit)),
+                URLQueryItem(name: "type", value: type.rawValue),
+                URLQueryItem(name: "sort", value: method.rawValue)
+            ])
     }
 }
-
-public enum TickType: String, CaseIterable {
-    case trades
-    case quotes
-}
-
-public enum FinancialReportType: String, CaseIterable {
-    case year = "Y"
-    case yearAnnualized = "YA"
-    case quarter = "Q"
-    case quarterAnnualized = "QA"
-    case trailingTwelveMonths = "T"
-    case trailingTwelveMonthsAnnualized = "TA"
-}
-
-public enum SortMethod: String, CaseIterable {
-    case reportPeriod = "reportPeriod"
-    case minusReportPeriod = "-reportPeriod"
-    case calendarDate = "calendarDate"
-    case minusCalendarDate = "-calendarDate"
-}
-
-public enum Timespan: String, CaseIterable {
-    case minute
-    case hour
-    case day
-    case week
-    case month
-    case quarter
-    case year
-}
-
-public enum Direction: String, CaseIterable {
-    case gainers
-    case losers
-}
-
-public enum BarSortMethod: String, CaseIterable {
-    case ascending = "asc"
-    case descending = "desc"
-}
-
