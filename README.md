@@ -4,7 +4,7 @@ An unofficial Swift API for polygon.io API. Makes use of Combine to make calls t
 
 Make the PolygonIO object 
 
-```
+```swift
 let polygonIO = PolygonIO(apiKey: "Replace with your key",
                           baseURL: "api.polygon.io",
                           sessionManager: SessionManager())
@@ -12,6 +12,6 @@ let polygonIO = PolygonIO(apiKey: "Replace with your key",
 
 Then when you want to fetch something like a ticker for instance. 
 
-```
+```swift
 polygonIO.tickers(search: "AAPL") // Returns a Publisher 
 ```
